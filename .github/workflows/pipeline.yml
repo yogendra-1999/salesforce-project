@@ -3,14 +3,14 @@
 #
 # FLOW:
 # 1. Developer creates PR  → Validation runs automatically
-# 2. Validation passes     → Reviewer approves PR manually  
+# 2. Validation passes     → Reviewer approves PR manually
 # 3. PR merged             → Actual deployment runs
 #
 # BRANCH → ORG MAPPING:
 # develop → DEVHUB Sandbox    (NoTestRun)
-# sit     → SIT Sandbox    (RunLocalTests)
-# uat     → UAT Sandbox    (RunLocalTests)
-# main    → PRODUCTION     (RunAllTestsInOrg)
+# sit     → SAT Sandbox      (RunLocalTests)
+# uat     → UAT Sandbox      (RunLocalTests)
+# main    → PRODUCTION       (RunAllTestsInOrg)
 # ================================================================
 
 name: Salesforce Delta Pipeline
@@ -22,6 +22,7 @@ on:
       - sit
       - uat
       - main
+
   pull_request:
     branches:
       - develop
@@ -35,106 +36,203 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # Checkout
+      # ============================================================
       - name: Checkout Full Git History
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # ============================================================
+      # Install Salesforce CLI
+      # ============================================================
       - name: Install Salesforce CLI
         run: |
           npm install --global @salesforce/cli
           sf --version
 
+      # ============================================================
+      # Install SFDX Git Delta
+      # ============================================================
       - name: Install sfdx-git-delta
-        run: echo y | sf plugins install sfdx-git-delta
-
-      - name: Set Environment Variables by Branch
         run: |
+          echo y | sf plugins install sfdx-git-delta
+
+      # ============================================================
+      # Set Environment Variables by Branch
+      # ============================================================
+      - name: Set Environment Variables by Branch
+        shell: bash
+        run: |
+
+          # --------------------------------------------------------
+          # DEVELOP → DEVHUB
+          # --------------------------------------------------------
           if [ "${{ github.ref_name }}" == "develop" ] || \
              [ "${{ github.base_ref }}" == "develop" ]; then
-            echo "AUTH_URL=${{ secrets.SALESFORCE_AUTH_URL_DEV }}" >> $GITHUB_ENV
-            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
-            echo "ENV_NAME=DEV" >> $GITHUB_ENV
 
+            echo "AUTH_URL=${{ secrets.SALESFORCE_AUTH_URL_DEVHUB }}" >> $GITHUB_ENV
+            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
+            echo "ENV_NAME=DEVHUB" >> $GITHUB_ENV
+
+          # --------------------------------------------------------
+          # SIT → SAT
+          # --------------------------------------------------------
           elif [ "${{ github.ref_name }}" == "sit" ] || \
                [ "${{ github.base_ref }}" == "sit" ]; then
-            echo "AUTH_URL=${{ secrets.SALESFORCE_AUTH_URL_SIT }}" >> $GITHUB_ENV
-            echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
-            echo "ENV_NAME=SIT" >> $GITHUB_ENV
 
+            echo "AUTH_URL=${{ secrets.SALESFORCE_AUTH_URL_SAT }}" >> $GITHUB_ENV
+            echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
+            echo "ENV_NAME=SAT" >> $GITHUB_ENV
+
+          # --------------------------------------------------------
+          # UAT → UAT
+          # --------------------------------------------------------
           elif [ "${{ github.ref_name }}" == "uat" ] || \
                [ "${{ github.base_ref }}" == "uat" ]; then
+
             echo "AUTH_URL=${{ secrets.SALESFORCE_AUTH_URL_UAT }}" >> $GITHUB_ENV
             echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
             echo "ENV_NAME=UAT" >> $GITHUB_ENV
 
+          # --------------------------------------------------------
+          # MAIN → PRODUCTION
+          # --------------------------------------------------------
           elif [ "${{ github.ref_name }}" == "main" ] || \
                [ "${{ github.base_ref }}" == "main" ]; then
+
             echo "AUTH_URL=${{ secrets.SALESFORCE_AUTH_URL_PROD }}" >> $GITHUB_ENV
             echo "TEST_LEVEL=RunAllTestsInOrg" >> $GITHUB_ENV
             echo "ENV_NAME=PROD" >> $GITHUB_ENV
+
+          else
+            echo "ERROR: Branch not mapped to Salesforce environment."
+            exit 1
           fi
 
+          echo "=========================================="
+          echo "Environment : $ENV_NAME"
+          echo "Test Level  : $TEST_LEVEL"
+          echo "=========================================="
+
+      # ============================================================
+      # Authenticate to Salesforce
+      # ============================================================
       - name: Authenticate to Salesforce (${{ env.ENV_NAME }})
+        shell: bash
         run: |
           echo "${{ env.AUTH_URL }}" | sf org login sfdx-url \
             --alias target-org \
             --set-default \
             --sfdx-url-stdin
 
+      # ============================================================
+      # Generate Delta Package
+      # ============================================================
       - name: Generate Delta Package
+        shell: bash
         run: |
+
           mkdir -p delta
+
           sf sgd source delta \
             --to HEAD \
             --from HEAD~1 \
             --output-dir delta \
             --source-dir force-app \
             --generate-delta
-          echo "====== Delta Components for ${{ env.ENV_NAME }} ======"
-          cat delta/package/package.xml
 
+          echo "=========================================="
+          echo "Delta Components for ${{ env.ENV_NAME }}"
+          echo "=========================================="
+
+          if [ -f "delta/package/package.xml" ]; then
+            cat delta/package/package.xml
+          else
+            echo "No package.xml generated."
+          fi
+
+      # ============================================================
+      # Validate Delta
+      # Only for Pull Request
+      # ============================================================
       - name: Validate Delta (${{ env.ENV_NAME }})
         if: github.event_name == 'pull_request'
+        shell: bash
         run: |
-          if grep -q '<members>' delta/package/package.xml; then
-            VALIDATE_TEST_LEVEL=${{ env.TEST_LEVEL }}
+
+          if [ -f "delta/package/package.xml" ] && \
+             grep -q '<members>' delta/package/package.xml; then
+
+            VALIDATE_TEST_LEVEL="${{ env.TEST_LEVEL }}"
+
+            # Salesforce validation should not use NoTestRun
             if [ "$VALIDATE_TEST_LEVEL" == "NoTestRun" ]; then
               VALIDATE_TEST_LEVEL="RunLocalTests"
             fi
+
+            echo "Validation Test Level: $VALIDATE_TEST_LEVEL"
+
             sf project deploy validate \
               --manifest delta/package/package.xml \
               --target-org target-org \
-              --test-level $VALIDATE_TEST_LEVEL \
+              --test-level "$VALIDATE_TEST_LEVEL" \
               --wait 60
+
           else
-            echo "No Salesforce metadata changes found. Skipping validation."
+            echo "No Salesforce metadata changes found."
+            echo "Skipping validation."
           fi
 
+      # ============================================================
+      # Deploy Delta
+      # Only after PR is merged / push
+      # ============================================================
       - name: Deploy Delta to ${{ env.ENV_NAME }}
         if: github.event_name == 'push'
+        shell: bash
         run: |
-          if grep -q '<members>' delta/package/package.xml; then
+
+          if [ -f "delta/package/package.xml" ] && \
+             grep -q '<members>' delta/package/package.xml; then
+
+            echo "Deploying to: ${{ env.ENV_NAME }}"
+            echo "Test Level: ${{ env.TEST_LEVEL }}"
+
             sf project deploy start \
               --manifest delta/package/package.xml \
               --target-org target-org \
-              --test-level ${{ env.TEST_LEVEL }} \
+              --test-level "${{ env.TEST_LEVEL }}" \
               --wait 60
+
           else
-            echo "No Salesforce metadata changes found. Skipping deployment."
+            echo "No Salesforce metadata changes found."
+            echo "Skipping deployment."
           fi
 
+      # ============================================================
+      # Deploy Destructive Changes
+      # Only on push
+      # ============================================================
       - name: Deploy Destructive Changes
         if: github.event_name == 'push'
+        shell: bash
         run: |
+
           if [ -f "delta/destructiveChanges/destructiveChanges.xml" ] && \
              grep -q '<types>' delta/destructiveChanges/destructiveChanges.xml; then
+
+            echo "Destructive changes found."
+
             sf project deploy start \
               --manifest delta/destructiveChanges/package.xml \
               --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
               --target-org target-org \
               --test-level NoTestRun \
               --wait 30
+
           else
-            echo "No destructive changes found. Skipping."
+            echo "No destructive changes found."
+            echo "Skipping destructive deployment."
           fi
