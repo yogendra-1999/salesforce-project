@@ -13,6 +13,7 @@ public class AccountTriggerHandler {
             contactsToCreate.add(con);
         }
 
+        if
         if (!contactsToCreate.isEmpty()) {
             insert contactsToCreate;
         }
