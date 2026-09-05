@@ -1,3 +1,4 @@
 {
-  "defaultusername": "myorg"
+  "defaultusername": "myorg",
+  "defaultdevhubusername": "prod"
 }
