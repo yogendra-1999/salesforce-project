@@ -427,4 +427,4 @@ jobs:
           else
             echo "No destructive changes found."
             echo "Skipping destructive deployment."
-          fis
+          fi
