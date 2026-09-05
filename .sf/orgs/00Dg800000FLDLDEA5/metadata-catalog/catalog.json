@@ -1,25 +1,9 @@
 {
   "version": 2,
   "orgId": "00Dg800000FLDLDEA5",
-  "writtenAt": "2026-09-05T17:34:50.458Z",
-  "generation": 411,
-  "inventory": [
-    {
-      "xmlName": "CustomLabels",
-      "observedAt": "2026-09-05T17:34:50.193Z",
-      "complete": true,
-      "components": [
-        {
-          "fullName": "CustomLabels",
-          "namespacePrefix": "",
-          "fileName": "labels/CustomLabels.labels",
-          "lastModifiedByName": "Yogendra Yogendra",
-          "lastModifiedDate": "1970-01-01T00:00:00.000Z"
-        }
-      ],
-      "folders": []
-    }
-  ],
+  "writtenAt": "2026-09-05T17:39:47.141Z",
+  "generation": 424,
+  "inventory": [],
   "sobjects": {
     "descriptions": []
   },
